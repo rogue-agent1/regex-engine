@@ -1,101 +1,84 @@
 #!/usr/bin/env python3
-"""regex_engine - Regex via Thompson NFA."""
-import argparse, sys
-
+"""Pure Python regex engine (Thompson NFA)."""
 class State:
-    def __init__(self, label=None):
-        self.label = label; self.out = []; self.out2 = []
-
-def compile_regex(pattern):
-    """Compile regex pattern to NFA using Thompson construction."""
-    frags = []
-    i = 0
-    def new_state(label=None):
-        return State(label)
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "(": frags.append(("LPAREN",)); i += 1; continue
-        elif c == ")":
-            # concat all since last LPAREN
-            stack = []
-            while frags and frags[-1] != ("LPAREN",):
-                stack.append(frags.pop())
-            if frags: frags.pop()  # remove LPAREN
-            if stack:
-                stack.reverse()
-                result = stack[0]
-                for s in stack[1:]:
-                    result = ("CONCAT", result, s)
-                frags.append(result)
-            i += 1; continue
-        elif c == "|":
-            frags.append(("ALT_OP",)); i += 1; continue
-        elif c == "*":
-            if frags: frags[-1] = ("STAR", frags[-1])
-            i += 1; continue
-        elif c == "+":
-            if frags: frags[-1] = ("PLUS", frags[-1])
-            i += 1; continue
-        elif c == "?":
-            if frags: frags[-1] = ("OPT", frags[-1])
-            i += 1; continue
-        elif c == ".":
-            frags.append(("DOT",)); i += 1; continue
-        elif c == "\\" and i+1 < len(pattern):
-            frags.append(("CHAR", pattern[i+1])); i += 2; continue
-        else:
-            frags.append(("CHAR", c)); i += 1; continue
-    return frags
-
-def match_nfa(fragments, text):
-    """Simple recursive NFA matching."""
-    def match_frag(frag, text, pos):
-        if frag is None: yield pos; return
-        kind = frag[0]
-        if kind == "CHAR":
-            if pos < len(text) and text[pos] == frag[1]:
-                yield pos + 1
-        elif kind == "DOT":
-            if pos < len(text):
-                yield pos + 1
-        elif kind == "CONCAT":
-            for p in match_frag(frag[1], text, pos):
-                yield from match_frag(frag[2], text, p)
-        elif kind == "STAR":
-            yield pos
-            for p in match_frag(frag[1], text, pos):
-                if p > pos:
-                    yield from match_frag(frag, text, p)
-        elif kind == "PLUS":
-            for p in match_frag(frag[1], text, pos):
-                yield p
-                if p > pos:
-                    yield from match_frag(("STAR", frag[1]), text, p)
-        elif kind == "OPT":
-            yield pos
-            yield from match_frag(frag[1], text, pos)
-    # Build single fragment from list
-    combined = None
-    for f in fragments:
-        if f == ("ALT_OP",): continue
-        if combined is None: combined = f
-        else: combined = ("CONCAT", combined, f)
-    if combined is None: return True, 0, 0
-    for start in range(len(text)):
-        for end in match_frag(combined, text, start):
-            return True, start, end
-    return False, -1, -1
-
-def main():
-    p = argparse.ArgumentParser(description="Regex engine (Thompson NFA)")
-    p.add_argument("pattern")
-    p.add_argument("text")
-    a = p.parse_args()
-    frags = compile_regex(a.pattern)
-    found, start, end = match_nfa(frags, a.text)
-    if found:
-        print(f"Match: \"{a.text[start:end]}\" at [{start}:{end}]")
-    else:
-        print("No match")
-
-if __name__ == "__main__": main()
+    def __init__(self,char=None,out1=None,out2=None):
+        self.char=char;self.out1=out1;self.out2=out2
+class NFA:
+    def __init__(self,start,accept): self.start=start;self.accept=accept
+def char_nfa(c):
+    accept=State(); start=State(c,accept); return NFA(start,accept)
+def concat(a,b):
+    a.accept.out1=b.start; a.accept.char=None; return NFA(a.start,b.accept)
+def union(a,b):
+    accept=State(); start=State(None,a.start,b.start)
+    a.accept.out1=accept; b.accept.out1=accept
+    return NFA(start,accept)
+def star(a):
+    accept=State(); start=State(None,a.start,accept)
+    a.accept.out1=a.start; a.accept.out2=accept
+    return NFA(start,accept)
+def plus(a):
+    accept=State(); start=State(None,a.start)
+    a.accept.out1=a.start; a.accept.out2=accept
+    return NFA(start,accept)
+def question(a):
+    accept=State(); start=State(None,a.start,accept)
+    a.accept.out1=accept
+    return NFA(start,accept)
+def parse_regex(pattern):
+    stack=[]; i=0
+    while i<len(pattern):
+        c=pattern[i]
+        if c=="(": stack.append("(")
+        elif c==")":
+            group=[]
+            while stack and stack[-1]!="(": group.append(stack.pop())
+            if stack: stack.pop()
+            if group:
+                r=group[-1]
+                for g in reversed(group[:-1]): r=concat(r,g)
+                stack.append(r)
+        elif c=="|":
+            stack.append("|")
+        elif c=="*":
+            if stack and not isinstance(stack[-1],str): stack.append(star(stack.pop()))
+        elif c=="+":
+            if stack and not isinstance(stack[-1],str): stack.append(plus(stack.pop()))
+        elif c=="?":
+            if stack and not isinstance(stack[-1],str): stack.append(question(stack.pop()))
+        elif c==".": stack.append(char_nfa("."))
+        else: stack.append(char_nfa(c))
+        i+=1
+    while "|" in stack:
+        idx=stack.index("|")
+        left=stack[idx-1]; right=stack[idx+1]
+        stack[idx-1:idx+2]=[union(left,right)]
+    if stack:
+        r=stack[0]
+        for s in stack[1:]:
+            if not isinstance(s,str): r=concat(r,s)
+        return r
+    return char_nfa("")
+def add_state(s,states,visited):
+    if s is None or id(s) in visited: return
+    visited.add(id(s))
+    if s.char is None:
+        add_state(s.out1,states,visited); add_state(s.out2,states,visited)
+    else: states.add(s)
+def match(pattern,text):
+    nfa=parse_regex(pattern)
+    current=set(); add_state(nfa.start,current,set())
+    for ch in text:
+        next_s=set()
+        for s in current:
+            if s.char==ch or s.char==".":
+                ns=set(); add_state(s.out1,ns,set()); next_s|=ns
+        current=next_s
+    return nfa.accept in current
+if __name__=="__main__":
+    tests=[("abc","abc",True),("a.c","axc",True),("ab*c","ac",True),("ab*c","abbc",True),("a|b","a",True),("a|b","c",False)]
+    ok=True
+    for p,t,exp in tests:
+        r=match(p,t)
+        if r!=exp: print(f"FAIL: /{p}/ vs '{t}': got {r}"); ok=False
+    if ok: print("All regex engine tests passed")

@@ -1,11 +1,13 @@
-# regex-engine
+# Regex Engine
 
-Regex engine from scratch (Thompson NFA construction)
+Pure Python regex engine (Thompson NFA).
 
 ## Usage
 
 ```bash
-python3 regex_engine.py --help
+python3 regex_engine.py
 ```
 
-Zero dependencies. Python 3.8+.
+## License
+
+MIT
