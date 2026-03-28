@@ -1,7 +1,11 @@
 # regex-engine
-Simple regex engine. Zero dependencies.
+
+Regex engine from scratch (Thompson NFA construction)
+
 ## Usage
+
 ```bash
-python3 regex_engine.py "a*b" "aaab"
-python3 regex_engine.py "hello.*world" "hello beautiful world" --test
+python3 regex_engine.py --help
 ```
+
+Zero dependencies. Python 3.8+.

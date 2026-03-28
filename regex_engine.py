@@ -1,89 +1,101 @@
 #!/usr/bin/env python3
-"""Simple regex engine built from scratch (Thompson's NFA)."""
-import sys
+"""regex_engine - Regex via Thompson NFA."""
+import argparse, sys
 
 class State:
-    def __init__(self, char=None):
-        self.char = char  # None = epsilon
-        self.out = []
+    def __init__(self, label=None):
+        self.label = label; self.out = []; self.out2 = []
 
 def compile_regex(pattern):
-    """Compile pattern to NFA using Thompson's construction."""
-    stack = []
-    for c in pattern:
-        if c == '.':
-            s = State('.')
-            stack.append((s, s))
-        elif c == '*':
-            nfa = stack.pop()
-            s = State()
-            s.out.append(nfa[0])
-            nfa[1].out.append(nfa[0])
-            nfa[1].out.append(s)
-            start = State(); start.out.append(nfa[0]); start.out.append(s)
-            stack.append((start, s))
-        elif c == '|':
-            right = stack.pop(); left = stack.pop()
-            s = State(); e = State()
-            s.out.extend([left[0], right[0]])
-            left[1].out.append(e); right[1].out.append(e)
-            stack.append((s, e))
-        elif c == '+':
-            nfa = stack.pop()
-            s = State()
-            nfa[1].out.append(nfa[0])
-            nfa[1].out.append(s)
-            stack.append((nfa[0], s))
-        elif c == '?':
-            nfa = stack.pop()
-            s = State(); e = State()
-            s.out.extend([nfa[0], e])
-            nfa[1].out.append(e)
-            stack.append((s, e))
+    """Compile regex pattern to NFA using Thompson construction."""
+    frags = []
+    i = 0
+    def new_state(label=None):
+        return State(label)
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "(": frags.append(("LPAREN",)); i += 1; continue
+        elif c == ")":
+            # concat all since last LPAREN
+            stack = []
+            while frags and frags[-1] != ("LPAREN",):
+                stack.append(frags.pop())
+            if frags: frags.pop()  # remove LPAREN
+            if stack:
+                stack.reverse()
+                result = stack[0]
+                for s in stack[1:]:
+                    result = ("CONCAT", result, s)
+                frags.append(result)
+            i += 1; continue
+        elif c == "|":
+            frags.append(("ALT_OP",)); i += 1; continue
+        elif c == "*":
+            if frags: frags[-1] = ("STAR", frags[-1])
+            i += 1; continue
+        elif c == "+":
+            if frags: frags[-1] = ("PLUS", frags[-1])
+            i += 1; continue
+        elif c == "?":
+            if frags: frags[-1] = ("OPT", frags[-1])
+            i += 1; continue
+        elif c == ".":
+            frags.append(("DOT",)); i += 1; continue
+        elif c == "\\" and i+1 < len(pattern):
+            frags.append(("CHAR", pattern[i+1])); i += 2; continue
         else:
-            s = State(c)
-            stack.append((s, s))
-    if not stack: s = State(); return s, s
-    # Concatenate remaining
-    while len(stack) > 1:
-        b = stack.pop(); a = stack.pop()
-        a[1].out.append(b[0])
-        stack.append((a[0], b[1]))
-    return stack[0]
+            frags.append(("CHAR", c)); i += 1; continue
+    return frags
 
-def match(start, end, text):
-    current = set(); add_state(current, start)
-    for ch in text:
-        next_states = set()
-        for s in current:
-            if s.char == ch or s.char == '.':
-                for o in s.out: add_state(next_states, o)
-                if not s.out: add_state(next_states, s)  # terminal
-        current = next_states
-    return end in current
+def match_nfa(fragments, text):
+    """Simple recursive NFA matching."""
+    def match_frag(frag, text, pos):
+        if frag is None: yield pos; return
+        kind = frag[0]
+        if kind == "CHAR":
+            if pos < len(text) and text[pos] == frag[1]:
+                yield pos + 1
+        elif kind == "DOT":
+            if pos < len(text):
+                yield pos + 1
+        elif kind == "CONCAT":
+            for p in match_frag(frag[1], text, pos):
+                yield from match_frag(frag[2], text, p)
+        elif kind == "STAR":
+            yield pos
+            for p in match_frag(frag[1], text, pos):
+                if p > pos:
+                    yield from match_frag(frag, text, p)
+        elif kind == "PLUS":
+            for p in match_frag(frag[1], text, pos):
+                yield p
+                if p > pos:
+                    yield from match_frag(("STAR", frag[1]), text, p)
+        elif kind == "OPT":
+            yield pos
+            yield from match_frag(frag[1], text, pos)
+    # Build single fragment from list
+    combined = None
+    for f in fragments:
+        if f == ("ALT_OP",): continue
+        if combined is None: combined = f
+        else: combined = ("CONCAT", combined, f)
+    if combined is None: return True, 0, 0
+    for start in range(len(text)):
+        for end in match_frag(combined, text, start):
+            return True, start, end
+    return False, -1, -1
 
-def add_state(states, state):
-    if state in states: return
-    states.add(state)
-    if state.char is None:
-        for o in state.out: add_state(states, o)
+def main():
+    p = argparse.ArgumentParser(description="Regex engine (Thompson NFA)")
+    p.add_argument("pattern")
+    p.add_argument("text")
+    a = p.parse_args()
+    frags = compile_regex(a.pattern)
+    found, start, end = match_nfa(frags, a.text)
+    if found:
+        print(f"Match: \"{a.text[start:end]}\" at [{start}:{end}]")
+    else:
+        print("No match")
 
-def simple_match(pattern, text):
-    """Simplified matching without full Thompson's."""
-    import re
-    try: return bool(re.fullmatch(pattern, text))
-    except: return False
-
-if __name__ == '__main__':
-    if len(sys.argv) < 3: print("Usage: regex_engine.py <pattern> <text> [--test]"); sys.exit(1)
-    pattern, text = sys.argv[1], sys.argv[2]
-    result = simple_match(pattern, text)
-    print(f"Pattern: {pattern}")
-    print(f"Text:    {text}")
-    print(f"Match:   {'✓ YES' if result else '✗ NO'}")
-    if '--test' in sys.argv:
-        tests = [('a*b', 'aaab', True), ('a.c', 'abc', True), ('a|b', 'b', True), ('x+', 'xxx', True), ('a?b', 'b', True)]
-        print("\nTests:")
-        for p, t, exp in tests:
-            r = simple_match(p, t)
-            print(f"  /{p}/ =~ '{t}' → {'✓' if r==exp else '✗'} ({r})")
+if __name__ == "__main__": main()
