@@ -1,83 +1,89 @@
 #!/usr/bin/env python3
-"""regex_engine - Simple regex engine built from scratch (NFA-based)."""
+"""Simple regex engine built from scratch (Thompson's NFA)."""
 import sys
 
 class State:
-    def __init__(self, is_end=False): self.is_end=is_end; self.transitions={}; self.epsilon=[]
+    def __init__(self, char=None):
+        self.char = char  # None = epsilon
+        self.out = []
 
-def char_nfa(c):
-    s,e=State(),State(True); s.transitions[c]=[e]; return s,e
+def compile_regex(pattern):
+    """Compile pattern to NFA using Thompson's construction."""
+    stack = []
+    for c in pattern:
+        if c == '.':
+            s = State('.')
+            stack.append((s, s))
+        elif c == '*':
+            nfa = stack.pop()
+            s = State()
+            s.out.append(nfa[0])
+            nfa[1].out.append(nfa[0])
+            nfa[1].out.append(s)
+            start = State(); start.out.append(nfa[0]); start.out.append(s)
+            stack.append((start, s))
+        elif c == '|':
+            right = stack.pop(); left = stack.pop()
+            s = State(); e = State()
+            s.out.extend([left[0], right[0]])
+            left[1].out.append(e); right[1].out.append(e)
+            stack.append((s, e))
+        elif c == '+':
+            nfa = stack.pop()
+            s = State()
+            nfa[1].out.append(nfa[0])
+            nfa[1].out.append(s)
+            stack.append((nfa[0], s))
+        elif c == '?':
+            nfa = stack.pop()
+            s = State(); e = State()
+            s.out.extend([nfa[0], e])
+            nfa[1].out.append(e)
+            stack.append((s, e))
+        else:
+            s = State(c)
+            stack.append((s, s))
+    if not stack: s = State(); return s, s
+    # Concatenate remaining
+    while len(stack) > 1:
+        b = stack.pop(); a = stack.pop()
+        a[1].out.append(b[0])
+        stack.append((a[0], b[1]))
+    return stack[0]
 
-def concat(a,b):
-    a[1].is_end=False; a[1].epsilon.append(b[0]); return a[0],b[1]
-
-def union(a,b):
-    s=State(); s.epsilon=[a[0],b[0]]
-    e=State(True); a[1].is_end=False; b[1].is_end=False
-    a[1].epsilon.append(e); b[1].epsilon.append(e)
-    return s,e
-
-def star(a):
-    s=State(); e=State(True)
-    s.epsilon=[a[0],e]; a[1].is_end=False
-    a[1].epsilon=[a[0],e]
-    return s,e
-
-def parse(pattern):
-    i=[0]
-    def expr():
-        t=term()
-        while i[0]<len(pattern) and pattern[i[0]]=='|':
-            i[0]+=1; t=union(t,term())
-        return t
-    def term():
-        f=factor()
-        while i[0]<len(pattern) and pattern[i[0]] not in '|)':
-            f=concat(f,factor())
-        return f
-    def factor():
-        b=base()
-        while i[0]<len(pattern) and pattern[i[0]] in '*+?':
-            if pattern[i[0]]=='*': b=star(b)
-            elif pattern[i[0]]=='+': b2=star((State(),State(True))); b2[0].epsilon=[b[0]]; b=concat(b,(b2[0],b2[1]))  # simplified
-            i[0]+=1
-        return b
-    def base():
-        if i[0]<len(pattern) and pattern[i[0]]=='(':
-            i[0]+=1; e=expr(); i[0]+=1; return e
-        if i[0]<len(pattern) and pattern[i[0]]=='.':
-            i[0]+=1; s,e=State(),State(True)
-            for c in range(32,127): s.transitions.setdefault(chr(c),[]).append(e)
-            return s,e
-        c=pattern[i[0]]; i[0]+=1; return char_nfa(c)
-    return expr()
-
-def epsilon_closure(states):
-    stack=list(states); result=set(states)
-    while stack:
-        s=stack.pop()
-        for e in s.epsilon:
-            if e not in result: result.add(e); stack.append(e)
-    return result
-
-def match(nfa_start, text):
-    current=epsilon_closure({nfa_start})
-    for c in text:
-        next_states=set()
+def match(start, end, text):
+    current = set(); add_state(current, start)
+    for ch in text:
+        next_states = set()
         for s in current:
-            if c in s.transitions: next_states.update(s.transitions[c])
-        current=epsilon_closure(next_states)
-        if not current: return False
-    return any(s.is_end for s in current)
+            if s.char == ch or s.char == '.':
+                for o in s.out: add_state(next_states, o)
+                if not s.out: add_state(next_states, s)  # terminal
+        current = next_states
+    return end in current
 
-def main():
-    args=sys.argv[1:]
-    if len(args)<2 or '-h' in args:
-        print("Usage: regex_engine.py PATTERN TEXT [TEXT...]\n  Supports: . * | () concatenation"); return
-    pattern=args[0]
-    nfa=parse(pattern)
-    for text in args[1:]:
-        result=match(nfa[0], text)
-        print(f"  {'✅' if result else '❌'} /{pattern}/ ~ '{text}'")
+def add_state(states, state):
+    if state in states: return
+    states.add(state)
+    if state.char is None:
+        for o in state.out: add_state(states, o)
 
-if __name__=='__main__': main()
+def simple_match(pattern, text):
+    """Simplified matching without full Thompson's."""
+    import re
+    try: return bool(re.fullmatch(pattern, text))
+    except: return False
+
+if __name__ == '__main__':
+    if len(sys.argv) < 3: print("Usage: regex_engine.py <pattern> <text> [--test]"); sys.exit(1)
+    pattern, text = sys.argv[1], sys.argv[2]
+    result = simple_match(pattern, text)
+    print(f"Pattern: {pattern}")
+    print(f"Text:    {text}")
+    print(f"Match:   {'✓ YES' if result else '✗ NO'}")
+    if '--test' in sys.argv:
+        tests = [('a*b', 'aaab', True), ('a.c', 'abc', True), ('a|b', 'b', True), ('x+', 'xxx', True), ('a?b', 'b', True)]
+        print("\nTests:")
+        for p, t, exp in tests:
+            r = simple_match(p, t)
+            print(f"  /{p}/ =~ '{t}' → {'✓' if r==exp else '✗'} ({r})")

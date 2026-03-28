@@ -1,6 +1,7 @@
 # regex-engine
-Simple NFA-based regex engine built from scratch. Supports `.`, `*`, `|`, `()`. Zero dependencies.
+Simple regex engine. Zero dependencies.
 ## Usage
-```
-python3 regex_engine.py "a(b|c)*d" abd abcbd ad aed
+```bash
+python3 regex_engine.py "a*b" "aaab"
+python3 regex_engine.py "hello.*world" "hello beautiful world" --test
 ```
