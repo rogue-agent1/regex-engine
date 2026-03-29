@@ -1,11 +1,11 @@
-# Regex Engine
+# Regex Engine from Scratch
 
-Pure Python regex engine (Thompson NFA).
+Regex Engine from Scratch — zero-dependency, single-file Python CLI.
 
 ## Usage
 
 ```bash
-python3 regex_engine.py
+python3 regex_engine.py --help
 ```
 
 ## License

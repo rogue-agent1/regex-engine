@@ -1,84 +1,101 @@
 #!/usr/bin/env python3
-"""Pure Python regex engine (Thompson NFA)."""
+"""Simple regex engine supporting . * + ? | () from scratch."""
+import sys
+
 class State:
-    def __init__(self,char=None,out1=None,out2=None):
-        self.char=char;self.out1=out1;self.out2=out2
-class NFA:
-    def __init__(self,start,accept): self.start=start;self.accept=accept
-def char_nfa(c):
-    accept=State(); start=State(c,accept); return NFA(start,accept)
-def concat(a,b):
-    a.accept.out1=b.start; a.accept.char=None; return NFA(a.start,b.accept)
-def union(a,b):
-    accept=State(); start=State(None,a.start,b.start)
-    a.accept.out1=accept; b.accept.out1=accept
-    return NFA(start,accept)
+    def __init__(self): self.transitions = []; self.epsilon = []
+
+def char_match(c):
+    s, e = State(), State()
+    s.transitions.append((c, e))
+    return s, e
+
+def dot_match():
+    s, e = State(), State()
+    s.transitions.append((".", e))
+    return s, e
+
+def concat(a, b):
+    a[1].epsilon.append(b[0])
+    return a[0], b[1]
+
+def alt(a, b):
+    s, e = State(), State()
+    s.epsilon.extend([a[0], b[0]])
+    a[1].epsilon.append(e); b[1].epsilon.append(e)
+    return s, e
+
 def star(a):
-    accept=State(); start=State(None,a.start,accept)
-    a.accept.out1=a.start; a.accept.out2=accept
-    return NFA(start,accept)
+    s, e = State(), State()
+    s.epsilon.extend([a[0], e])
+    a[1].epsilon.extend([a[0], e])
+    return s, e
+
 def plus(a):
-    accept=State(); start=State(None,a.start)
-    a.accept.out1=a.start; a.accept.out2=accept
-    return NFA(start,accept)
-def question(a):
-    accept=State(); start=State(None,a.start,accept)
-    a.accept.out1=accept
-    return NFA(start,accept)
+    s, e = State(), State()
+    s.epsilon.append(a[0])
+    a[1].epsilon.extend([a[0], e])
+    return s, e
+
+def opt(a):
+    s, e = State(), State()
+    s.epsilon.extend([a[0], e])
+    a[1].epsilon.append(e)
+    return s, e
+
 def parse_regex(pattern):
-    stack=[]; i=0
-    while i<len(pattern):
-        c=pattern[i]
-        if c=="(": stack.append("(")
-        elif c==")":
-            group=[]
-            while stack and stack[-1]!="(": group.append(stack.pop())
-            if stack: stack.pop()
-            if group:
-                r=group[-1]
-                for g in reversed(group[:-1]): r=concat(r,g)
-                stack.append(r)
-        elif c=="|":
-            stack.append("|")
-        elif c=="*":
-            if stack and not isinstance(stack[-1],str): stack.append(star(stack.pop()))
-        elif c=="+":
-            if stack and not isinstance(stack[-1],str): stack.append(plus(stack.pop()))
-        elif c=="?":
-            if stack and not isinstance(stack[-1],str): stack.append(question(stack.pop()))
-        elif c==".": stack.append(char_nfa("."))
-        else: stack.append(char_nfa(c))
-        i+=1
-    while "|" in stack:
-        idx=stack.index("|")
-        left=stack[idx-1]; right=stack[idx+1]
-        stack[idx-1:idx+2]=[union(left,right)]
-    if stack:
-        r=stack[0]
-        for s in stack[1:]:
-            if not isinstance(s,str): r=concat(r,s)
-        return r
-    return char_nfa("")
-def add_state(s,states,visited):
-    if s is None or id(s) in visited: return
-    visited.add(id(s))
-    if s.char is None:
-        add_state(s.out1,states,visited); add_state(s.out2,states,visited)
-    else: states.add(s)
-def match(pattern,text):
-    nfa=parse_regex(pattern)
-    current=set(); add_state(nfa.start,current,set())
-    for ch in text:
-        next_s=set()
+    pos = [0]
+    def expr():
+        t = term()
+        while pos[0] < len(pattern) and pattern[pos[0]] == "|":
+            pos[0] += 1; t = alt(t, term())
+        return t
+    def term():
+        f = None
+        while pos[0] < len(pattern) and pattern[pos[0]] not in "|)":
+            a = atom()
+            if pos[0] < len(pattern) and pattern[pos[0]] == "*": pos[0] += 1; a = star(a)
+            elif pos[0] < len(pattern) and pattern[pos[0]] == "+": pos[0] += 1; a = plus(a)
+            elif pos[0] < len(pattern) and pattern[pos[0]] == "?": pos[0] += 1; a = opt(a)
+            f = concat(f, a) if f else a
+        return f or char_match("")
+    def atom():
+        if pattern[pos[0]] == "(":
+            pos[0] += 1; e = expr()
+            if pos[0] < len(pattern) and pattern[pos[0]] == ")": pos[0] += 1
+            return e
+        elif pattern[pos[0]] == ".":
+            pos[0] += 1; return dot_match()
+        else:
+            c = pattern[pos[0]]; pos[0] += 1; return char_match(c)
+    return expr()
+
+def epsilon_closure(states):
+    stack = list(states); result = set(states)
+    while stack:
+        s = stack.pop()
+        for e in s.epsilon:
+            if e not in result: result.add(e); stack.append(e)
+    return result
+
+def match(pattern, text):
+    if not pattern: return True
+    nfa = parse_regex(pattern)
+    current = epsilon_closure({nfa[0]})
+    for c in text:
+        next_s = set()
         for s in current:
-            if s.char==ch or s.char==".":
-                ns=set(); add_state(s.out1,ns,set()); next_s|=ns
-        current=next_s
-    return nfa.accept in current
-if __name__=="__main__":
-    tests=[("abc","abc",True),("a.c","axc",True),("ab*c","ac",True),("ab*c","abbc",True),("a|b","a",True),("a|b","c",False)]
-    ok=True
-    for p,t,exp in tests:
-        r=match(p,t)
-        if r!=exp: print(f"FAIL: /{p}/ vs '{t}': got {r}"); ok=False
-    if ok: print("All regex engine tests passed")
+            for tc, dest in s.transitions:
+                if tc == c or tc == ".": next_s.add(dest)
+        current = epsilon_closure(next_s)
+        if not current: return False
+    return nfa[1] in current
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: regex_engine.py <pattern> <text>"); return
+    p, t = sys.argv[1], sys.argv[2]
+    r = match(p, t)
+    print(f"/{p}/ {'matches' if r else 'does not match'} \"{t}\"")
+
+if __name__ == "__main__": main()
