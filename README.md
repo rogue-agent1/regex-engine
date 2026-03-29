@@ -1,19 +1,9 @@
-# Regex Engine
+# regex_engine
 
-NFA-based regular expression engine with Thompson's construction
-
-## Usage
+Regex engine via NFA construction with *, +, ?, |, groups, dot matching
 
 ```bash
-python3 regex_engine.py --help
+python3 regex_engine.py test
 ```
 
-## Features
-
-- Zero dependencies (Python 3.8+ stdlib only)
-- Single file
-- CLI interface
-
-## License
-
-MIT
+Zero deps. Python 3.8+.
