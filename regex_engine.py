@@ -1,101 +1,100 @@
 #!/usr/bin/env python3
-"""Simple regex engine supporting . * + ? | () from scratch."""
-import sys
+"""regex_engine - NFA regex engine with Thompson's construction."""
+import argparse
 
 class State:
-    def __init__(self): self.transitions = []; self.epsilon = []
+    def __init__(self, label=None): self.label=label; self.edges=[]
+    def add(self, label, target): self.edges.append((label, target))
 
-def char_match(c):
-    s, e = State(), State()
-    s.transitions.append((c, e))
-    return s, e
-
-def dot_match():
-    s, e = State(), State()
-    s.transitions.append((".", e))
-    return s, e
-
-def concat(a, b):
-    a[1].epsilon.append(b[0])
-    return a[0], b[1]
-
-def alt(a, b):
-    s, e = State(), State()
-    s.epsilon.extend([a[0], b[0]])
-    a[1].epsilon.append(e); b[1].epsilon.append(e)
-    return s, e
-
-def star(a):
-    s, e = State(), State()
-    s.epsilon.extend([a[0], e])
-    a[1].epsilon.extend([a[0], e])
-    return s, e
-
-def plus(a):
-    s, e = State(), State()
-    s.epsilon.append(a[0])
-    a[1].epsilon.extend([a[0], e])
-    return s, e
-
-def opt(a):
-    s, e = State(), State()
-    s.epsilon.extend([a[0], e])
-    a[1].epsilon.append(e)
-    return s, e
-
-def parse_regex(pattern):
-    pos = [0]
-    def expr():
-        t = term()
-        while pos[0] < len(pattern) and pattern[pos[0]] == "|":
-            pos[0] += 1; t = alt(t, term())
-        return t
-    def term():
-        f = None
-        while pos[0] < len(pattern) and pattern[pos[0]] not in "|)":
-            a = atom()
-            if pos[0] < len(pattern) and pattern[pos[0]] == "*": pos[0] += 1; a = star(a)
-            elif pos[0] < len(pattern) and pattern[pos[0]] == "+": pos[0] += 1; a = plus(a)
-            elif pos[0] < len(pattern) and pattern[pos[0]] == "?": pos[0] += 1; a = opt(a)
-            f = concat(f, a) if f else a
-        return f or char_match("")
-    def atom():
-        if pattern[pos[0]] == "(":
-            pos[0] += 1; e = expr()
-            if pos[0] < len(pattern) and pattern[pos[0]] == ")": pos[0] += 1
-            return e
-        elif pattern[pos[0]] == ".":
-            pos[0] += 1; return dot_match()
+def parse(pattern):
+    """Convert regex pattern to postfix with explicit concat '.'"""
+    output=[]; ops=[]; i=0; prev_atom=False
+    while i<len(pattern):
+        c=pattern[i]
+        if c=='(':
+            if prev_atom: ops.append('.')
+            ops.append(c); prev_atom=False
+        elif c==')':
+            while ops and ops[-1]!='(': output.append(ops.pop())
+            if ops: ops.pop()
+            prev_atom=True
+        elif c in '*+?':
+            output.append(c); prev_atom=True
+        elif c=='|':
+            while ops and ops[-1]=='.': output.append(ops.pop())
+            ops.append(c); prev_atom=False
+        elif c=='\\' and i+1<len(pattern):
+            if prev_atom: ops.append('.')
+            i+=1; output.append(('lit',pattern[i])); prev_atom=True
         else:
-            c = pattern[pos[0]]; pos[0] += 1; return char_match(c)
-    return expr()
+            if prev_atom: ops.append('.')
+            output.append(('lit',c)); prev_atom=True
+        i+=1
+    while ops: output.append(ops.pop())
+    return output
+
+def build_nfa(postfix):
+    stack=[]
+    for token in postfix:
+        if isinstance(token, tuple) and token[0]=='lit':
+            s,e=State(),State(); s.add(token[1],e); stack.append((s,e))
+        elif token=='.':
+            b=stack.pop(); a=stack.pop(); a[1].add(None,b[0]); stack.append((a[0],b[1]))
+        elif token=='|':
+            b=stack.pop(); a=stack.pop(); s,e=State(),State()
+            s.add(None,a[0]); s.add(None,b[0]); a[1].add(None,e); b[1].add(None,e)
+            stack.append((s,e))
+        elif token=='*':
+            a=stack.pop(); s,e=State(),State()
+            s.add(None,a[0]); s.add(None,e); a[1].add(None,a[0]); a[1].add(None,e)
+            stack.append((s,e))
+        elif token=='+':
+            a=stack.pop(); s,e=State(),State()
+            s.add(None,a[0]); a[1].add(None,a[0]); a[1].add(None,e)
+            stack.append((s,e))
+        elif token=='?':
+            a=stack.pop(); s,e=State(),State()
+            s.add(None,a[0]); s.add(None,e); a[1].add(None,e)
+            stack.append((s,e))
+    return stack[0] if stack else (State(),State())
 
 def epsilon_closure(states):
-    stack = list(states); result = set(states)
+    stack=list(states); result=set(states)
     while stack:
-        s = stack.pop()
-        for e in s.epsilon:
-            if e not in result: result.add(e); stack.append(e)
+        s=stack.pop()
+        for label,target in s.edges:
+            if label is None and target not in result: result.add(target); stack.append(target)
     return result
 
-def match(pattern, text):
-    if not pattern: return True
-    nfa = parse_regex(pattern)
-    current = epsilon_closure({nfa[0]})
+def match(nfa_start, nfa_end, text):
+    current=epsilon_closure({nfa_start})
     for c in text:
-        next_s = set()
+        next_states=set()
         for s in current:
-            for tc, dest in s.transitions:
-                if tc == c or tc == ".": next_s.add(dest)
-        current = epsilon_closure(next_s)
+            for label,target in s.edges:
+                if label==c or label=='.': next_states.add(target)
+        current=epsilon_closure(next_states)
         if not current: return False
-    return nfa[1] in current
+    return nfa_end in current
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: regex_engine.py <pattern> <text>"); return
-    p, t = sys.argv[1], sys.argv[2]
-    r = match(p, t)
-    print(f"/{p}/ {'matches' if r else 'does not match'} \"{t}\"")
+    p=argparse.ArgumentParser(description="NFA regex engine")
+    p.add_argument("pattern"); p.add_argument("text",nargs="?")
+    p.add_argument("--test",action="store_true")
+    args=p.parse_args()
+    if args.test:
+        tests=[("a*b","b",True),("a*b","aab",True),("a*b","aa",False),("(a|b)*c","abac",True),("ab+c","ac",False),("ab+c","abbc",True)]
+        for pat,txt,exp in tests:
+            pf=parse(pat); nfa=build_nfa(pf); r=match(nfa[0],nfa[1],txt)
+            status="✓" if r==exp else "✗"
+            print(f"  {status} /{pat}/ vs '{txt}' -> {r}")
+        return
+    postfix=parse(args.pattern); nfa=build_nfa(postfix)
+    if args.text:
+        r=match(nfa[0],nfa[1],args.text)
+        print(f"/{args.pattern}/ {'matches' if r else 'does not match'} '{args.text}'")
+    else:
+        print(f"NFA built for /{args.pattern}/ — provide text to match")
 
-if __name__ == "__main__": main()
+if __name__=="__main__":
+    main()
